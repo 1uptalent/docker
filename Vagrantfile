@@ -40,6 +40,15 @@ apt-get install -q -y lxc-docker
 
 usermod -a -G docker "$user"
 
+# Make the kernel support memory and swap accounting
+sed -i -e 's/GRUB_CMDLINE_LINUX=.*$/GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"/' /etc/default/grub
+update-grub 
+
+# Make docker listen on a tcp socket
+sed -i -e 's/DOCKER_OPTS=.*$/DOCKER_OPTS="-H tcp:\\/\\/0.0.0.0:4243 -H unix:\\/\\/\\/var\\/run\\/docker.sock"/' /etc/init/docker.conf
+mkdir -p `dirname _HOST_DIR_`
+ln -s /vagrant _HOST_DIR_
+
 tmp=`mktemp -q` && {
     # Only install the backport kernel, don't bother upgrading if the backport is
     # already installed.  We want parse the output of apt so we need to save it
@@ -87,6 +96,8 @@ if [ ! -d /opt/VBoxGuestAdditions-4.3.6/ ]; then
     umount /mnt
 fi
 VBOX_SCRIPT
+
+$vbox_script.gsub! /_HOST_DIR_/, `pwd`
 
 Vagrant::Config.run do |config|
   # Setup virtual machine box. This VM configuration code is always executed.
@@ -150,6 +161,7 @@ Vagrant::VERSION >= "1.1.0" and Vagrant.configure("2") do |config|
 
   config.vm.provider :virtualbox do |vb, override|
     override.vm.provision :shell, :inline => $vbox_script
+    vb.memory = 2048
     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
     vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
   end
@@ -161,16 +173,15 @@ Vagrant::VERSION < "1.1.0" and Vagrant::Config.run do |config|
   config.vm.provision :shell, :inline => $vbox_script
 end
 
-if !FORWARD_DOCKER_PORTS.nil?
-  Vagrant::VERSION < "1.1.0" and Vagrant::Config.run do |config|
-    (49000..49900).each do |port|
-      config.vm.forward_port port, port
-    end
+Vagrant::VERSION < "1.1.0" and Vagrant::Config.run do |config|
+  (49000..49900).each do |port|
+    config.vm.forward_port port, port
   end
+end
 
-  Vagrant::VERSION >= "1.1.0" and Vagrant.configure("2") do |config|
-    (49000..49900).each do |port|
-      config.vm.network :forwarded_port, :host => port, :guest => port
-    end
+Vagrant::VERSION >= "1.1.0" and Vagrant.configure("2") do |config|
+  (9000..9020).each do |port|
+    config.vm.network :forwarded_port, :host => port, :guest => port
   end
+  config.vm.network :forwarded_port, :host => 4243, :guest => 4243
 end
