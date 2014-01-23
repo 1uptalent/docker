@@ -149,6 +149,7 @@ func MkBuildContext(dockerfile string, files [][2]string) (archive.Archive, erro
 		hdr := &tar.Header{
 			Name: name,
 			Size: int64(len(content)),
+			ModTime: time.Now(),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, err
