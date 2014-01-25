@@ -10,8 +10,8 @@ ok      "/images/search":                       getImagesSearch,        N
 ok      "/images/{name:.*}/get":                getImagesGet,           0
 ok      "/images/{name:.*}/history":            getImagesHistory,       N
 #3621   "/images/{name:.*}/json":               getImagesByName,        1
-TODO    "/containers/ps":                       getContainersJSON,      N
-TODO    "/containers/json":                     getContainersJSON,      1
+#3728   "/containers/ps":                       getContainersJSON,      N
+#3728   "/containers/json":                     getContainersJSON,      1
 ok      "/containers/{name:.*}/export":         getContainersExport,    0
 ok      "/containers/{name:.*}/changes":        getContainersChanges,   N
 #3621   "/containers/{name:.*}/json":           getContainersByName,    1
@@ -19,13 +19,13 @@ ok      "/containers/{name:.*}/top":            getContainersTop,       N
 ok      "/containers/{name:.*}/attach/ws":      wsContainersAttach,     0                                       yes
 
 **POST**
-TODO    "/auth":                                postAuth,               0                       yes
+N/A     "/auth":                                postAuth,               0                       yes
 ok      "/commit":                              postCommit,             0
-TODO    "/build":                               postBuild,              0                       yes
-TODO    "/images/create":                       postImagesCreate,       N                       yes             yes (pull)
+#3741   "/build":                               postBuild,              0                       yes
+#3725   "/images/create":                       postImagesCreate,       N                       yes             yes (pull)
 ok      "/images/{name:.*}/insert":             postImagesInsert,       N                       yes             yes
 ok      "/images/load":                         postImagesLoad,         1                                       yes (stdin)
-TODO    "/images/{name:.*}/push":               postImagesPush,         N                                       yes
+#3727   "/images/{name:.*}/push":               postImagesPush,         N                                       yes
 ok      "/images/{name:.*}/tag":                postImagesTag,          0
 ok      "/containers/create":                   postContainersCreate,   0
 ok      "/containers/{name:.*}/kill":           postContainersKill,     0
@@ -42,5 +42,5 @@ ok      "/containers/{name:.*}":                deleteContainers,       0
 #3645   "/images/{name:.*}":                    deleteImages,           N
 
 **OPTIONS**
-ok      "":                                     optionsHandler,         0
+N/A     "":                                     optionsHandler,         0
 ```

@@ -346,15 +346,15 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 		return err
 	}
 
-	var out2 APIAuth
+	var out2 engine.Env
 	err = json.Unmarshal(body, &out2)
 	if err != nil {
 		cli.configFile, _ = auth.LoadConfig(os.Getenv("HOME"))
 		return err
 	}
 	auth.SaveConfig(cli.configFile)
-	if out2.Status != "" {
-		fmt.Fprintf(cli.out, "%s\n", out2.Status)
+	if out2.Get("Status") != "" {
+		fmt.Fprintf(cli.out, "%s\n", out2.Get("Status"))
 	}
 	return nil
 }
@@ -829,18 +829,17 @@ func (cli *DockerCli) CmdRmi(args ...string) error {
 			fmt.Fprintf(cli.err, "%s\n", err)
 			encounteredError = fmt.Errorf("Error: failed to remove one or more images")
 		} else {
-			var outs []APIRmi
-			err = json.Unmarshal(body, &outs)
-			if err != nil {
+			outs := engine.NewTable("Created", 0)
+			if _, err := outs.ReadListFrom(body); err != nil {
 				fmt.Fprintf(cli.err, "%s\n", err)
 				encounteredError = fmt.Errorf("Error: failed to remove one or more images")
 				continue
 			}
-			for _, out := range outs {
-				if out.Deleted != "" {
-					fmt.Fprintf(cli.out, "Deleted: %s\n", out.Deleted)
+			for _, out := range outs.Data {
+				if out.Get("Deleted") != "" {
+					fmt.Fprintf(cli.out, "Deleted: %s\n", out.Get("Deleted"))
 				} else {
-					fmt.Fprintf(cli.out, "Untagged: %s\n", out.Untagged)
+					fmt.Fprintf(cli.out, "Untagged: %s\n", out.Get("Untagged"))
 				}
 			}
 		}
@@ -861,16 +860,13 @@ func (cli *DockerCli) CmdHistory(args ...string) error {
 		return nil
 	}
 
-	stream, _, err := cli.call("GET", "/images/"+cmd.Arg(0)+"/history", nil, false)
-	if stream != nil {
-		defer stream.Close()
-	}
+	body, _, err := readBody(cli.call("GET", "/images/"+cmd.Arg(0)+"/history", nil, false))
 	if err != nil {
 		return err
 	}
 
 	outs := engine.NewTable("Created", 0)
-	if _, err := outs.ReadListFrom(stream); err != nil {
+	if _, err := outs.ReadListFrom(body); err != nil {
 		return err
 	}
 
@@ -1141,16 +1137,13 @@ func (cli *DockerCli) CmdImages(args ...string) error {
 	filter := cmd.Arg(0)
 
 	if *flViz || *flTree {
-		stream, _, err := cli.call("GET", "/images/json?all=1", nil, false)
-		if stream != nil {
-			defer stream.Close()
-		}
+		body, _, err := readBody(cli.call("GET", "/images/json?all=1", nil, false))
 		if err != nil {
 			return err
 		}
 
 		outs := engine.NewTable("Created", 0)
-		if _, err := outs.ReadListFrom(stream); err != nil {
+		if _, err := outs.ReadListFrom(body); err != nil {
 			return err
 		}
 
@@ -1213,16 +1206,14 @@ func (cli *DockerCli) CmdImages(args ...string) error {
 			v.Set("all", "1")
 		}
 
-		stream, _, err := cli.call("GET", "/images/json?"+v.Encode(), nil, false)
-		if stream != nil {
-			defer stream.Close()
-		}
+		body, _, err := readBody(cli.call("GET", "/images/json?"+v.Encode(), nil, false))
+
 		if err != nil {
 			return err
 		}
 
 		outs := engine.NewTable("Created", 0)
-		if _, err := outs.ReadListFrom(stream); err != nil {
+		if _, err := outs.ReadListFrom(body); err != nil {
 			return err
 		}
 
@@ -1320,13 +1311,13 @@ func (cli *DockerCli) printTreeNode(noTrunc bool, image *engine.Env, prefix stri
 	}
 }
 
-func displayablePorts(ports []APIPort) string {
+func displayablePorts(ports *engine.Table) string {
 	result := []string{}
-	for _, port := range ports {
-		if port.IP == "" {
-			result = append(result, fmt.Sprintf("%d/%s", port.PublicPort, port.Type))
+	for _, port := range ports.Data {
+		if port.Get("IP") == "" {
+			result = append(result, fmt.Sprintf("%d/%s", port.GetInt("PublicPort"), port.Get("Type")))
 		} else {
-			result = append(result, fmt.Sprintf("%s:%d->%d/%s", port.IP, port.PublicPort, port.PrivatePort, port.Type))
+			result = append(result, fmt.Sprintf("%s:%d->%d/%s", port.Get("IP"), port.GetInt("PublicPort"), port.GetInt("PrivatePort"), port.Get("Type")))
 		}
 	}
 	sort.Strings(result)
@@ -1372,9 +1363,8 @@ func (cli *DockerCli) CmdPs(args ...string) error {
 		return err
 	}
 
-	var outs []APIContainers
-	err = json.Unmarshal(body, &outs)
-	if err != nil {
+	outs := engine.NewTable("Created", 0)
+	if _, err := outs.ReadListFrom(body); err != nil {
 		return err
 	}
 	w := tabwriter.NewWriter(cli.out, 20, 1, 3, ' ', 0)
@@ -1387,32 +1377,42 @@ func (cli *DockerCli) CmdPs(args ...string) error {
 		}
 	}
 
-	for _, out := range outs {
+	for _, out := range outs.Data {
+		var (
+			outID    = out.Get("ID")
+			outNames = out.GetList("Names")
+		)
+
 		if !*noTrunc {
-			out.ID = utils.TruncateID(out.ID)
+			outID = utils.TruncateID(outID)
 		}
 
 		// Remove the leading / from the names
-		for i := 0; i < len(out.Names); i++ {
-			out.Names[i] = out.Names[i][1:]
+		for i := 0; i < len(outNames); i++ {
+			outNames[i] = outNames[i][1:]
 		}
 
 		if !*quiet {
+			var (
+				outCommand = out.Get("Command")
+				ports      = engine.NewTable("", 0)
+			)
 			if !*noTrunc {
-				out.Command = utils.Trunc(out.Command, 20)
+				outCommand = utils.Trunc(outCommand, 20)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s ago\t%s\t%s\t%s\t", out.ID, out.Image, out.Command, utils.HumanDuration(time.Now().UTC().Sub(time.Unix(out.Created, 0))), out.Status, displayablePorts(out.Ports), strings.Join(out.Names, ","))
+			ports.ReadListFrom([]byte(out.Get("Ports")))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s ago\t%s\t%s\t%s\t", outID, out.Get("Image"), outCommand, utils.HumanDuration(time.Now().UTC().Sub(time.Unix(out.GetInt64("Created"), 0))), out.Get("Status"), displayablePorts(ports), strings.Join(outNames, ","))
 			if *size {
-				if out.SizeRootFs > 0 {
-					fmt.Fprintf(w, "%s (virtual %s)\n", utils.HumanSize(out.SizeRw), utils.HumanSize(out.SizeRootFs))
+				if out.GetInt("SizeRootFs") > 0 {
+					fmt.Fprintf(w, "%s (virtual %s)\n", utils.HumanSize(out.GetInt64("SizeRw")), utils.HumanSize(out.GetInt64("SizeRootFs")))
 				} else {
-					fmt.Fprintf(w, "%s\n", utils.HumanSize(out.SizeRw))
+					fmt.Fprintf(w, "%s\n", utils.HumanSize(out.GetInt64("SizeRw")))
 				}
 			} else {
 				fmt.Fprint(w, "\n")
 			}
 		} else {
-			fmt.Fprintln(w, out.ID)
+			fmt.Fprintln(w, outID)
 		}
 	}
 
@@ -1534,16 +1534,14 @@ func (cli *DockerCli) CmdDiff(args ...string) error {
 		return nil
 	}
 
-	stream, _, err := cli.call("GET", "/containers/"+cmd.Arg(0)+"/changes", nil, false)
-	if stream != nil {
-		defer stream.Close()
-	}
+	body, _, err := readBody(cli.call("GET", "/containers/"+cmd.Arg(0)+"/changes", nil, false))
+
 	if err != nil {
 		return err
 	}
 
 	outs := engine.NewTable("", 0)
-	if _, err := outs.ReadListFrom(stream); err != nil {
+	if _, err := outs.ReadListFrom(body); err != nil {
 		return err
 	}
 	for _, change := range outs.Data {
@@ -1676,15 +1674,14 @@ func (cli *DockerCli) CmdSearch(args ...string) error {
 
 	v := url.Values{}
 	v.Set("term", cmd.Arg(0))
-	stream, _, err := cli.call("GET", "/images/search?"+v.Encode(), nil, true)
-	if stream != nil {
-		defer stream.Close()
-	}
+
+	body, _, err := readBody(cli.call("GET", "/images/search?"+v.Encode(), nil, false))
+
 	if err != nil {
 		return err
 	}
 	outs := engine.NewTable("star_count", 0)
-	if _, err := outs.ReadListFrom(stream); err != nil {
+	if _, err := outs.ReadListFrom(body); err != nil {
 		return err
 	}
 	w := tabwriter.NewWriter(cli.out, 10, 1, 3, ' ', 0)

@@ -61,7 +61,7 @@ func cleanup(eng *engine.Engine, t *testing.T) error {
 	}
 	for _, image := range images.Data {
 		if image.Get("ID") != unitTestImageID {
-			mkServerFromEngine(eng, t).ImageDelete(image.Get("ID"), false)
+			mkServerFromEngine(eng, t).DeleteImage(image.Get("ID"), false)
 		}
 	}
 	return nil
@@ -137,7 +137,9 @@ func setupBaseImage() {
 	// If the unit test is not found, try to download it.
 	if img, err := srv.ImageInspect(unitTestImageName); err != nil || img.ID != unitTestImageID {
 		// Retrieve the Image
-		if err := srv.ImagePull(unitTestImageName, "", os.Stdout, utils.NewStreamFormatter(false), nil, nil, true); err != nil {
+		job = eng.Job("pull", unitTestImageName)
+		job.Stdout.Add(utils.NopWriteCloser(os.Stdout))
+		if err := job.Run(); err != nil {
 			log.Fatalf("Unable to pull the test image: %s", err)
 		}
 	}

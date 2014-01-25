@@ -11,29 +11,6 @@ type (
 		Untagged string `json:",omitempty"`
 	}
 
-	APIContainers struct {
-		ID         string `json:"Id"`
-		Image      string
-		Command    string
-		Created    int64
-		Status     string
-		Ports      []APIPort
-		SizeRw     int64
-		SizeRootFs int64
-		Names      []string
-	}
-
-	APIContainersOld struct {
-		ID         string `json:"Id"`
-		Image      string
-		Command    string
-		Created    int64
-		Status     string
-		Ports      string
-		SizeRw     int64
-		SizeRootFs int64
-	}
-
 	APIID struct {
 		ID string `json:"Id"`
 	}
@@ -54,10 +31,6 @@ type (
 		StatusCode int
 	}
 
-	APIAuth struct {
-		Status string
-	}
-
 	APIImageConfig struct {
 		ID string `json:"Id"`
 		*Config
@@ -67,21 +40,4 @@ type (
 		Resource string
 		HostPath string
 	}
-	APIContainer struct {
-		*Container
-		HostConfig *HostConfig
-	}
 )
-
-func (api APIContainers) ToLegacy() *APIContainersOld {
-	return &APIContainersOld{
-		ID:         api.ID,
-		Image:      api.Image,
-		Command:    api.Command,
-		Created:    api.Created,
-		Status:     api.Status,
-		Ports:      displayablePorts(api.Ports),
-		SizeRw:     api.SizeRw,
-		SizeRootFs: api.SizeRootFs,
-	}
-}
