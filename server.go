@@ -7,8 +7,8 @@ import (
 	"github.com/dotcloud/docker/archive"
 	"github.com/dotcloud/docker/auth"
 	"github.com/dotcloud/docker/engine"
-	"github.com/dotcloud/docker/pkg/cgroups"
 	"github.com/dotcloud/docker/pkg/graphdb"
+	"github.com/dotcloud/docker/pkg/systemd"
 	"github.com/dotcloud/docker/registry"
 	"github.com/dotcloud/docker/utils"
 	"io"
@@ -114,29 +114,20 @@ func jobInitApi(job *engine.Job) engine.Status {
 	return engine.StatusOK
 }
 
+// ListenAndServe loops through all of the protocols sent in to docker and spawns
+// off a go routine to setup a serving http.Server for each.
 func (srv *Server) ListenAndServe(job *engine.Job) engine.Status {
 	protoAddrs := job.Args
 	chErrors := make(chan error, len(protoAddrs))
+
 	for _, protoAddr := range protoAddrs {
 		protoAddrParts := strings.SplitN(protoAddr, "://", 2)
-		switch protoAddrParts[0] {
-		case "unix":
-			if err := syscall.Unlink(protoAddrParts[1]); err != nil && !os.IsNotExist(err) {
-				log.Fatal(err)
-			}
-		case "tcp":
-			if !strings.HasPrefix(protoAddrParts[1], "127.0.0.1") {
-				log.Println("/!\\ DON'T BIND ON ANOTHER IP ADDRESS THAN 127.0.0.1 IF YOU DON'T KNOW WHAT YOU'RE DOING /!\\")
-			}
-		default:
-			job.Errorf("Invalid protocol format.")
-			return engine.StatusErr
-		}
 		go func() {
-			// FIXME: merge Server.ListenAndServe with ListenAndServe
-			chErrors <- ListenAndServe(protoAddrParts[0], protoAddrParts[1], srv, job.GetenvBool("Logging"))
+			log.Printf("Listening for HTTP on %s (%s)\n", protoAddrParts[0], protoAddrParts[1])
+			chErrors <- ListenAndServe(protoAddrParts[0], protoAddrParts[1], srv, job.GetenvBool("Logging"), job.GetenvBool("EnableCors"))
 		}()
 	}
+
 	for i := 0; i < len(protoAddrs); i += 1 {
 		err := <-chErrors
 		if err != nil {
@@ -144,6 +135,10 @@ func (srv *Server) ListenAndServe(job *engine.Job) engine.Status {
 			return engine.StatusErr
 		}
 	}
+
+	// Tell the init daemon we are accepting requests
+	go systemd.SdNotify("READY=1")
+
 	return engine.StatusOK
 }
 
@@ -980,7 +975,7 @@ func (srv *Server) ContainerTop(job *engine.Job) engine.Status {
 			job.Errorf("Container %s is not running", name)
 			return engine.StatusErr
 		}
-		pids, err := cgroups.GetPidsForContainer(container.ID)
+		pids, err := srv.runtime.execDriver.GetPidsForContainer(container.ID)
 		if err != nil {
 			job.Error(err)
 			return engine.StatusErr
@@ -1757,11 +1752,23 @@ func (srv *Server) ContainerCreate(job *engine.Job) engine.Status {
 		return engine.StatusErr
 	}
 	if config.Memory > 0 && !srv.runtime.sysInfo.MemoryLimit {
+		job.Errorf("WARNING: Your kernel does not support memory limit capabilities. Limitation discarded.\n")
 		config.Memory = 0
 	}
 	if config.Memory > 0 && !srv.runtime.sysInfo.SwapLimit {
+		job.Errorf("WARNING: Your kernel does not support swap limit capabilities. Limitation discarded.\n")
 		config.MemorySwap = -1
 	}
+	resolvConf, err := utils.GetResolvConf()
+	if err != nil {
+		job.Error(err)
+		return engine.StatusErr
+	}
+	if !config.NetworkDisabled && len(config.Dns) == 0 && len(srv.runtime.config.Dns) == 0 && utils.CheckLocalDns(resolvConf) {
+		job.Errorf("WARNING: Docker detected local DNS server on resolv.conf. Using default external servers: %v\n", defaultDns)
+		config.Dns = defaultDns
+	}
+
 	container, buildWarnings, err := srv.runtime.Create(&config, name)
 	if err != nil {
 		if srv.runtime.graph.IsNotExist(err) {
@@ -1774,6 +1781,9 @@ func (srv *Server) ContainerCreate(job *engine.Job) engine.Status {
 		}
 		job.Error(err)
 		return engine.StatusErr
+	}
+	if !container.Config.NetworkDisabled && srv.runtime.sysInfo.IPv4ForwardingDisabled {
+		job.Errorf("WARNING: IPv4 forwarding is disabled.\n")
 	}
 	srv.LogEvent("create", container.ID, srv.runtime.repositories.ImageName(container.Image))
 	// FIXME: this is necessary because runtime.Create might return a nil container
@@ -1909,7 +1919,7 @@ func (srv *Server) ContainerDestroy(job *engine.Job) engine.Status {
 					continue
 				}
 				if err := srv.runtime.volumes.Delete(volumeId); err != nil {
-					job.Error(err)
+					job.Errorf("Error calling volumes.Delete(%q): %v", volumeId, err)
 					return engine.StatusErr
 				}
 			}

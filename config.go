@@ -10,9 +10,9 @@ type DaemonConfig struct {
 	Pidfile                     string
 	Root                        string
 	AutoRestart                 bool
-	EnableCors                  bool
 	Dns                         []string
 	EnableIptables              bool
+	EnableIpForward             bool
 	BridgeIface                 string
 	BridgeIp                    string
 	DefaultIp                   net.IP
@@ -28,11 +28,11 @@ func ConfigFromJob(job *engine.Job) *DaemonConfig {
 	config.Pidfile = job.Getenv("Pidfile")
 	config.Root = job.Getenv("Root")
 	config.AutoRestart = job.GetenvBool("AutoRestart")
-	config.EnableCors = job.GetenvBool("EnableCors")
 	if dns := job.GetenvList("Dns"); dns != nil {
 		config.Dns = dns
 	}
 	config.EnableIptables = job.GetenvBool("EnableIptables")
+	config.EnableIpForward = job.GetenvBool("EnableIpForward")
 	if br := job.Getenv("BridgeIface"); br != "" {
 		config.BridgeIface = br
 	} else {

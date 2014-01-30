@@ -36,6 +36,7 @@ func main() {
 		flEnableCors         = flag.Bool([]string{"#api-enable-cors", "-api-enable-cors"}, false, "Enable CORS headers in the remote API")
 		flDns                = docker.NewListOpts(docker.ValidateIp4Address)
 		flEnableIptables     = flag.Bool([]string{"#iptables", "-iptables"}, true, "Disable docker's addition of iptables rules")
+		flEnableIpForward    = flag.Bool([]string{"#ip-forward", "-ip-forward"}, true, "Disable enabling of net.ipv4.ip_forward")
 		flDefaultIp          = flag.String([]string{"#ip", "-ip"}, "0.0.0.0", "Default IP address to use when binding container ports")
 		flInterContainerComm = flag.Bool([]string{"#icc", "-icc"}, true, "Enable inter-container communication")
 		flGraphDriver        = flag.String([]string{"s", "-storage-driver"}, "", "Force the docker runtime to use a specific storage driver")
@@ -43,7 +44,7 @@ func main() {
 		flMtu                = flag.Int([]string{"#mtu", "-mtu"}, docker.DefaultNetworkMtu, "Set the containers network mtu")
 	)
 	flag.Var(&flDns, []string{"#dns", "-dns"}, "Force docker to use specific DNS servers")
-	flag.Var(&flHosts, []string{"H", "-host"}, "Multiple tcp://host:port or unix://path/to/socket to bind in daemon mode, single connection otherwise")
+	flag.Var(&flHosts, []string{"H", "-host"}, "tcp://host:port, unix://path/to/socket, fd://* or fd://socketfd to use in daemon mode. Multiple sockets can be specified")
 
 	flag.Parse()
 
@@ -85,9 +86,9 @@ func main() {
 		job.Setenv("Pidfile", *pidfile)
 		job.Setenv("Root", *flRoot)
 		job.SetenvBool("AutoRestart", *flAutoRestart)
-		job.SetenvBool("EnableCors", *flEnableCors)
 		job.SetenvList("Dns", flDns.GetAll())
 		job.SetenvBool("EnableIptables", *flEnableIptables)
+		job.SetenvBool("EnableIpForward", *flEnableIpForward)
 		job.Setenv("BridgeIface", *bridgeName)
 		job.Setenv("BridgeIp", *bridgeIp)
 		job.Setenv("DefaultIp", *flDefaultIp)
@@ -100,6 +101,7 @@ func main() {
 		// Serve api
 		job = eng.Job("serveapi", flHosts.GetAll()...)
 		job.SetenvBool("Logging", true)
+		job.SetenvBool("EnableCors", *flEnableCors)
 		if err := job.Run(); err != nil {
 			log.Fatal(err)
 		}
