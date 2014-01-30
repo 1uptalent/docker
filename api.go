@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -559,14 +560,6 @@ func postContainersCreate(srv *Server, version float64, w http.ResponseWriter, r
 	if err := job.DecodeEnv(r.Body); err != nil {
 		return err
 	}
-	resolvConf, err := utils.GetResolvConf()
-	if err != nil {
-		return err
-	}
-	if !job.GetenvBool("NetworkDisabled") && len(job.Getenv("Dns")) == 0 && len(srv.runtime.config.Dns) == 0 && utils.CheckLocalDns(resolvConf) {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("Docker detected local DNS server on resolv.conf. Using default external servers: %v", defaultDns))
-		job.SetenvList("Dns", defaultDns)
-	}
 	// Read container ID from the first line of stdout
 	job.Stdout.AddString(&out.ID)
 	// Read warnings from stderr
@@ -580,20 +573,6 @@ func postContainersCreate(srv *Server, version float64, w http.ResponseWriter, r
 	for scanner.Scan() {
 		out.Warnings = append(out.Warnings, scanner.Text())
 	}
-	if job.GetenvInt("Memory") > 0 && !srv.runtime.sysInfo.MemoryLimit {
-		log.Println("WARNING: Your kernel does not support memory limit capabilities. Limitation discarded.")
-		out.Warnings = append(out.Warnings, "Your kernel does not support memory limit capabilities. Limitation discarded.")
-	}
-	if job.GetenvInt("Memory") > 0 && !srv.runtime.sysInfo.SwapLimit {
-		log.Println("WARNING: Your kernel does not support swap limit capabilities. Limitation discarded.")
-		out.Warnings = append(out.Warnings, "Your kernel does not support memory swap capabilities. Limitation discarded.")
-	}
-
-	if !job.GetenvBool("NetworkDisabled") && srv.runtime.sysInfo.IPv4ForwardingDisabled {
-		log.Println("Warning: IPv4 forwarding is disabled.")
-		out.Warnings = append(out.Warnings, "IPv4 forwarding is disabled.")
-	}
-
 	return writeJSON(w, http.StatusCreated, out)
 }
 
@@ -930,7 +909,7 @@ func writeCorsHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
 }
 
-func makeHttpHandler(srv *Server, logging bool, localMethod string, localRoute string, handlerFunc HttpApiFunc) http.HandlerFunc {
+func makeHttpHandler(srv *Server, logging bool, localMethod string, localRoute string, handlerFunc HttpApiFunc, enableCors bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// log the request
 		utils.Debugf("Calling %s %s", localMethod, localRoute)
@@ -949,7 +928,7 @@ func makeHttpHandler(srv *Server, logging bool, localMethod string, localRoute s
 		if err != nil {
 			version = APIVERSION
 		}
-		if srv.runtime.config.EnableCors {
+		if enableCors {
 			writeCorsHeaders(w, r)
 		}
 
@@ -991,7 +970,7 @@ func AttachProfiler(router *mux.Router) {
 	router.HandleFunc("/debug/pprof/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
 }
 
-func createRouter(srv *Server, logging bool) (*mux.Router, error) {
+func createRouter(srv *Server, logging, enableCors bool) (*mux.Router, error) {
 	r := mux.NewRouter()
 	if os.Getenv("DEBUG") != "" {
 		AttachProfiler(r)
@@ -1052,7 +1031,7 @@ func createRouter(srv *Server, logging bool) (*mux.Router, error) {
 			localMethod := method
 
 			// build the handler function
-			f := makeHttpHandler(srv, logging, localMethod, localRoute, localFct)
+			f := makeHttpHandler(srv, logging, localMethod, localRoute, localFct, enableCors)
 
 			// add the new route
 			if localRoute == "" {
@@ -1071,7 +1050,7 @@ func createRouter(srv *Server, logging bool) (*mux.Router, error) {
 // FIXME: refactor this to be part of Server and not require re-creating a new
 // router each time. This requires first moving ListenAndServe into Server.
 func ServeRequest(srv *Server, apiversion float64, w http.ResponseWriter, req *http.Request) error {
-	router, err := createRouter(srv, false)
+	router, err := createRouter(srv, false, true)
 	if err != nil {
 		return err
 	}
@@ -1081,16 +1060,66 @@ func ServeRequest(srv *Server, apiversion float64, w http.ResponseWriter, req *h
 	return nil
 }
 
-func ListenAndServe(proto, addr string, srv *Server, logging bool) error {
-	r, err := createRouter(srv, logging)
-	if err != nil {
-		return err
-	}
-	l, e := net.Listen(proto, addr)
+// ServeFD creates an http.Server and sets it up to serve given a socket activated
+// argument.
+func ServeFd(addr string, handle http.Handler) error {
+	ls, e := systemd.ListenFD(addr)
 	if e != nil {
 		return e
 	}
+
+	chErrors := make(chan error, len(ls))
+
+	// Since ListenFD will return one or more sockets we have
+	// to create a go func to spawn off multiple serves
+	for i := range ls {
+		listener := ls[i]
+		go func() {
+			httpSrv := http.Server{Handler: handle}
+			chErrors <- httpSrv.Serve(listener)
+		}()
+	}
+
+	for i := 0; i < len(ls); i += 1 {
+		err := <-chErrors
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ListenAndServe sets up the required http.Server and gets it listening for
+// each addr passed in and does protocol specific checking.
+func ListenAndServe(proto, addr string, srv *Server, logging, enableCors bool) error {
+	r, err := createRouter(srv, logging, enableCors)
+	if err != nil {
+		return err
+	}
+
+	if proto == "fd" {
+		return ServeFd(addr, r)
+	}
+
 	if proto == "unix" {
+		if err := syscall.Unlink(addr); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	l, err := net.Listen(proto, addr)
+	if err != nil {
+		return err
+	}
+
+	// Basic error and sanity checking
+	switch proto {
+	case "tcp":
+		if !strings.HasPrefix(addr, "127.0.0.1") {
+			log.Println("/!\\ DON'T BIND ON ANOTHER IP ADDRESS THAN 127.0.0.1 IF YOU DON'T KNOW WHAT YOU'RE DOING /!\\")
+		}
+	case "unix":
 		if err := os.Chmod(addr, 0660); err != nil {
 			return err
 		}
@@ -1110,11 +1139,10 @@ func ListenAndServe(proto, addr string, srv *Server, logging bool) error {
 				return err
 			}
 		}
+	default:
+		return fmt.Errorf("Invalid protocol format.")
 	}
-	httpSrv := http.Server{Addr: addr, Handler: r}
 
-	log.Printf("Listening for HTTP on %s (%s)\n", addr, proto)
-	// Tell the init daemon we are accepting requests
-	go systemd.SdNotify("READY=1")
+	httpSrv := http.Server{Addr: addr, Handler: r}
 	return httpSrv.Serve(l)
 }
