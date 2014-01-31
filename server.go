@@ -42,8 +42,7 @@ func init() {
 // The signals SIGINT, SIGQUIT and SIGTERM are intercepted for cleanup.
 func jobInitApi(job *engine.Job) engine.Status {
 	job.Logf("Creating server")
-	// FIXME: ImportEnv deprecates ConfigFromJob
-	srv, err := NewServer(job.Eng, ConfigFromJob(job))
+	srv, err := NewServer(job.Eng, DaemonConfigFromJob(job))
 	if err != nil {
 		job.Error(err)
 		return engine.StatusErr
@@ -1084,7 +1083,7 @@ func (srv *Server) Containers(job *engine.Job) engine.Status {
 	}, -1)
 
 	for _, container := range srv.runtime.List() {
-		if !container.State.IsRunning() && !all && n == -1 && since == "" && before == "" {
+		if !container.State.IsRunning() && !all && n <= 0 && since == "" && before == "" {
 			continue
 		}
 		if before != "" && !foundBefore {
@@ -1093,7 +1092,7 @@ func (srv *Server) Containers(job *engine.Job) engine.Status {
 			}
 			continue
 		}
-		if displayed == n {
+		if n > 0 && displayed == n {
 			break
 		}
 		if container.ID == since || utils.TruncateID(container.ID) == since {
@@ -1742,11 +1741,7 @@ func (srv *Server) ContainerCreate(job *engine.Job) engine.Status {
 		job.Printf("Usage: %s", job.Name)
 		return engine.StatusErr
 	}
-	var config Config
-	if err := job.ExportEnv(&config); err != nil {
-		job.Error(err)
-		return engine.StatusErr
-	}
+	config := ContainerConfigFromJob(job)
 	if config.Memory != 0 && config.Memory < 524288 {
 		job.Errorf("Minimum memory limit allowed is 512k")
 		return engine.StatusErr
@@ -1769,7 +1764,7 @@ func (srv *Server) ContainerCreate(job *engine.Job) engine.Status {
 		config.Dns = defaultDns
 	}
 
-	container, buildWarnings, err := srv.runtime.Create(&config, name)
+	container, buildWarnings, err := srv.runtime.Create(config, name)
 	if err != nil {
 		if srv.runtime.graph.IsNotExist(err) {
 			_, tag := utils.ParseRepositoryTag(config.Image)
@@ -1803,10 +1798,12 @@ func (srv *Server) ContainerRestart(job *engine.Job) engine.Status {
 		job.Errorf("Usage: %s CONTAINER\n", job.Name)
 		return engine.StatusErr
 	}
-	name := job.Args[0]
-	t := job.GetenvInt("t")
-	if t == -1 {
-		t = 10
+	var (
+		name = job.Args[0]
+		t    = 10
+	)
+	if job.EnvExists("t") {
+		t = job.GetenvInt("t")
 	}
 	if container := srv.runtime.Get(name); container != nil {
 		if err := container.Restart(int(t)); err != nil {
@@ -2196,11 +2193,7 @@ func (srv *Server) ContainerStart(job *engine.Job) engine.Status {
 	}
 	// If no environment was set, then no hostconfig was passed.
 	if len(job.Environ()) > 0 {
-		var hostConfig HostConfig
-		if err := job.ExportEnv(&hostConfig); err != nil {
-			job.Error(err)
-			return engine.StatusErr
-		}
+		hostConfig := ContainerHostConfigFromJob(job)
 		// Validate the HostConfig binds. Make sure that:
 		// 1) the source of a bind mount isn't /
 		//         The bind mount "/:/foo" isn't allowed.
@@ -2227,11 +2220,11 @@ func (srv *Server) ContainerStart(job *engine.Job) engine.Status {
 			}
 		}
 		// Register any links from the host config before starting the container
-		if err := srv.RegisterLinks(container, &hostConfig); err != nil {
+		if err := srv.RegisterLinks(container, hostConfig); err != nil {
 			job.Error(err)
 			return engine.StatusErr
 		}
-		container.hostConfig = &hostConfig
+		container.hostConfig = hostConfig
 		container.ToDisk()
 	}
 	if err := container.Start(); err != nil {
@@ -2248,10 +2241,12 @@ func (srv *Server) ContainerStop(job *engine.Job) engine.Status {
 		job.Errorf("Usage: %s CONTAINER\n", job.Name)
 		return engine.StatusErr
 	}
-	name := job.Args[0]
-	t := job.GetenvInt("t")
-	if t == -1 {
-		t = 10
+	var (
+		name = job.Args[0]
+		t    = 10
+	)
+	if job.EnvExists("t") {
+		t = job.GetenvInt("t")
 	}
 	if container := srv.runtime.Get(name); container != nil {
 		if err := container.Stop(int(t)); err != nil {
