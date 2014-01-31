@@ -68,8 +68,9 @@ ENV	GOPATH	/go:/go/src/github.com/dotcloud/docker/vendor
 RUN	cd /usr/local/go/src && ./make.bash --no-clean 2>&1
 
 # Compile Go for cross compilation
-ENV	DOCKER_CROSSPLATFORMS	darwin/amd64 darwin/386
-# TODO add linux/386 and linux/arm
+ENV	DOCKER_CROSSPLATFORMS	linux/386 linux/arm darwin/amd64 darwin/386
+# (set an explicit GOARM of 5 for maximum compatibility)
+ENV	GOARM	5
 RUN	cd /usr/local/go/src && bash -xc 'for platform in $DOCKER_CROSSPLATFORMS; do GOOS=${platform%/*} GOARCH=${platform##*/} ./make.bash --no-clean 2>&1; done'
 
 # Grab Go's cover tool for dead-simple code coverage testing
@@ -80,6 +81,9 @@ RUN	gem install --no-rdoc --no-ri fpm --version 1.0.2
 
 # Setup s3cmd config
 RUN	/bin/echo -e '[default]\naccess_key=$AWS_ACCESS_KEY\nsecret_key=$AWS_SECRET_KEY' > /.s3cfg
+
+# Set user.email so crosbymichael's in-container merge commits go smoothly
+RUN	git config --global user.email 'docker-dummy@example.com'
 
 VOLUME	/var/lib/docker
 WORKDIR	/go/src/github.com/dotcloud/docker
