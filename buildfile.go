@@ -404,20 +404,31 @@ func (b *buildFile) CmdAdd(args string) error {
 			return err
 		}
 		defer os.RemoveAll(tmpDirName)
-		if _, err = io.Copy(tmpFile, resp.Body); err != nil {
-			tmpFile.Close()
-			return err
-		}
-		origPath = path.Join(filepath.Base(tmpDirName), filepath.Base(tmpFileName))
-		tmpFile.Close()
-
-		// Process the checksum
-		r, err := archive.Tar(tmpFileName, archive.Uncompressed)
+		buf := make([]byte, 65536)
+		h := sha256.New()
+		resp, err = utils.Download(orig)
 		if err != nil {
 			return err
 		}
-		tarSum := utils.TarSum{Reader: r, DisableCompression: true}
-		remoteHash = tarSum.Sum(nil)
+		for {
+			n, err := resp.Body.Read(buf)
+			fmt.Println("Buffer: ", n, buf[:n])
+			if err != nil && err != io.EOF {
+				return err
+			}
+			if n == 0 {
+				break
+			}
+
+			if _, err := tmpFile.Write(buf[:n]); err != nil {
+				return err
+			}
+			h.Write(buf[:n])
+		}
+		remoteHash = "filesum+sha256:" + hex.EncodeToString(h.Sum(nil))
+
+		origPath = path.Join(filepath.Base(tmpDirName), filepath.Base(tmpFileName))
+		tmpFile.Close()
 
 		// If the destination is a directory, figure out the filename.
 		if strings.HasSuffix(dest, "/") {
