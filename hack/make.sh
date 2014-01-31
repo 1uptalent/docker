@@ -23,6 +23,8 @@ set -e
 
 set -o pipefail
 
+TESTNAME=$2
+
 # We're a nice, sexy, little shell script, and people might try to run us;
 # but really, they shouldn't. We want to be in a container!
 RESOLVCONF=$(readlink --canonicalize /etc/resolv.conf)
@@ -93,7 +95,10 @@ go_test_dir() {
 	(
 		set -x
 		cd "$dir"
-		go test ${testcover[@]} -ldflags "$LDFLAGS" $BUILDFLAGS $TESTFLAGS
+    if [ "$TESTNAME" ]; then
+      TESTNAMEFLAGS="-run $TESTNAME"
+    fi
+    go test ${testcover[@]} -ldflags "$LDFLAGS" $BUILDFLAGS $TESTFLAGS $TESTNAMEFLAGS
 	)
 }
 
