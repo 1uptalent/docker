@@ -15,8 +15,8 @@ PRIVATE_NETWORK = ENV['PRIVATE_NETWORK']
 # See http://docs.docker.io/en/latest/use/port_redirection/ for more
 # $ FORWARD_DOCKER_PORTS=1 vagrant [up|reload]
 FORWARD_DOCKER_PORTS = ENV['FORWARD_DOCKER_PORTS']
-VAGRANT_RAM = ENV['VAGRANT_RAM'] || 512
-VAGRANT_CORES = ENV['VAGRANT_CORES'] || 1
+VAGRANT_RAM = ENV['VAGRANT_RAM'] || 4096
+VAGRANT_CORES = ENV['VAGRANT_CORES'] || 2
 
 # You may also provide a comma-separated list of ports
 # for Vagrant to forward. For example:
@@ -175,7 +175,7 @@ Vagrant::VERSION >= "1.1.0" and Vagrant.configure("2") do |config|
 
   config.vm.provider :virtualbox do |vb, override|
     override.vm.provision :shell, :inline => $vbox_script
-    vb.memory = 2048
+    vb.memory = 4096
     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
     vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
     vb.customize ["modifyvm", :id, "--memory", VAGRANT_RAM]
