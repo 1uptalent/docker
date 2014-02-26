@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/dotcloud/docker/utils"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -26,6 +28,10 @@ func Register(name string, handler Handler) error {
 	}
 	globalHandlers[name] = handler
 	return nil
+}
+
+func unregister(name string) {
+	delete(globalHandlers, name)
 }
 
 // The Engine is the core of Docker.
@@ -105,6 +111,12 @@ func New(root string) (*Engine, error) {
 		Stderr:   os.Stderr,
 		Stdin:    os.Stdin,
 	}
+	eng.Register("commands", func(job *Job) Status {
+		for _, name := range eng.commands() {
+			job.Printf("%s\n", name)
+		}
+		return StatusOK
+	})
 	// Copy existing global handlers
 	for k, v := range globalHandlers {
 		eng.handlers[k] = v
@@ -114,6 +126,17 @@ func New(root string) (*Engine, error) {
 
 func (eng *Engine) String() string {
 	return fmt.Sprintf("%s|%s", eng.Root(), eng.id[:8])
+}
+
+// Commands returns a list of all currently registered commands,
+// sorted alphabetically.
+func (eng *Engine) commands() []string {
+	names := make([]string, 0, len(eng.handlers))
+	for name := range eng.handlers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Job creates a new job which can later be executed.
@@ -134,6 +157,48 @@ func (eng *Engine) Job(name string, args ...string) *Job {
 		job.handler = handler
 	}
 	return job
+}
+
+// ParseJob creates a new job from a text description using a shell-like syntax.
+//
+// The following syntax is used to parse `input`:
+//
+// * Words are separated using standard whitespaces as separators.
+// * Quotes and backslashes are not interpreted.
+// * Words of the form 'KEY=[VALUE]' are added to the job environment.
+// * All other words are added to the job arguments.
+//
+// For example:
+//
+// job, _ := eng.ParseJob("VERBOSE=1 echo hello TEST=true world")
+//
+// The resulting job will have:
+//	job.Args={"echo", "hello", "world"}
+//	job.Env={"VERBOSE":"1", "TEST":"true"}
+//
+func (eng *Engine) ParseJob(input string) (*Job, error) {
+	// FIXME: use a full-featured command parser
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	scanner.Split(bufio.ScanWords)
+	var (
+		cmd []string
+		env Env
+	)
+	for scanner.Scan() {
+		word := scanner.Text()
+		kv := strings.SplitN(word, "=", 2)
+		if len(kv) == 2 {
+			env.Set(kv[0], kv[1])
+		} else {
+			cmd = append(cmd, word)
+		}
+	}
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("empty command: '%s'", input)
+	}
+	job := eng.Job(cmd[0], cmd[1:]...)
+	job.Env().Init(&env)
+	return job, nil
 }
 
 func (eng *Engine) Logf(format string, args ...interface{}) (n int, err error) {

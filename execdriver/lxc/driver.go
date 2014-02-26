@@ -76,7 +76,10 @@ func (d *driver) Name() string {
 	return fmt.Sprintf("%s-%s", DriverName, version)
 }
 
-func (d *driver) Run(c *execdriver.Command, startCallback execdriver.StartCallback) (int, error) {
+func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (int, error) {
+	if err := SetTerminal(c, pipes); err != nil {
+		return -1, err
+	}
 	configPath, err := d.generateLXCConfig(c)
 	if err != nil {
 		return -1, err
@@ -279,7 +282,8 @@ func (i *info) IsRunning() bool {
 
 	output, err := i.driver.getInfo(i.ID)
 	if err != nil {
-		panic(err)
+		utils.Errorf("Error getting info for lxc container %s: %s (%s)", i.ID, err, output)
+		return false
 	}
 	if strings.Contains(string(output), "RUNNING") {
 		running = true
@@ -297,9 +301,8 @@ func (d *driver) Info(id string) execdriver.Info {
 func (d *driver) GetPidsForContainer(id string) ([]int, error) {
 	pids := []int{}
 
-	// memory is chosen randomly, any cgroup used by docker works
-	subsystem := "memory"
-
+	// cpu is chosen because it is the only non optional subsystem in cgroups
+	subsystem := "cpu"
 	cgroupRoot, err := cgroups.FindCgroupMountpoint(subsystem)
 	if err != nil {
 		return pids, err

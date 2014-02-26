@@ -25,6 +25,7 @@ type DaemonConfig struct {
 	BridgeIP                    string
 	InterContainerCommunication bool
 	GraphDriver                 string
+	ExecDriver                  string
 	Mtu                         int
 	DisableNetwork              bool
 }
@@ -39,9 +40,11 @@ func DaemonConfigFromJob(job *engine.Job) *DaemonConfig {
 		EnableIptables:              job.GetenvBool("EnableIptables"),
 		EnableIpForward:             job.GetenvBool("EnableIpForward"),
 		BridgeIP:                    job.Getenv("BridgeIP"),
+		BridgeIface:                 job.Getenv("BridgeIface"),
 		DefaultIp:                   net.ParseIP(job.Getenv("DefaultIp")),
 		InterContainerCommunication: job.GetenvBool("InterContainerCommunication"),
 		GraphDriver:                 job.Getenv("GraphDriver"),
+		ExecDriver:                  job.Getenv("ExecDriver"),
 	}
 	if dns := job.GetenvList("Dns"); dns != nil {
 		config.Dns = dns
@@ -51,7 +54,7 @@ func DaemonConfigFromJob(job *engine.Job) *DaemonConfig {
 	} else {
 		config.Mtu = GetDefaultNetworkMtu()
 	}
-	config.DisableNetwork = job.Getenv("BridgeIface") == DisableNetworkBridge
+	config.DisableNetwork = config.BridgeIface == DisableNetworkBridge
 
 	return config
 }
