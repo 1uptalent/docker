@@ -51,6 +51,9 @@ type InitArgs struct {
 	Args       []string
 	Mtu        int
 	Driver     string
+	Console    string
+	Pipe       int
+	Root       string
 }
 
 // Driver specific information based on
@@ -74,7 +77,6 @@ type TtyTerminal interface {
 type Driver interface {
 	Run(c *Command, pipes *Pipes, startCallback StartCallback) (int, error) // Run executes the process and blocks until the process exits and returns the exit code
 	Kill(c *Command, sig int) error
-	Restore(c *Command) error                     // Wait and try to re-attach on an out of process command
 	Name() string                                 // Driver name
 	Info(id string) Info                          // "temporary" hack (until we move state from core to plugins)
 	GetPidsForContainer(id string) ([]int, error) // Returns a list of pids for the given container.
@@ -113,15 +115,13 @@ type Command struct {
 	Config     []string   `json:"config"`  //  generic values that specific drivers can consume
 	Resources  *Resources `json:"resources"`
 
-	Terminal Terminal `json:"-"` // standard or tty terminal
-	Console  string   `json:"-"` // dev/console path
+	Terminal     Terminal `json:"-"`             // standard or tty terminal
+	Console      string   `json:"-"`             // dev/console path
+	ContainerPid int      `json:"container_pid"` // the pid for the process inside a container
 }
 
 // Return the pid of the process
 // If the process is nil -1 will be returned
 func (c *Command) Pid() int {
-	if c.Process == nil {
-		return -1
-	}
-	return c.Process.Pid
+	return c.ContainerPid
 }

@@ -64,7 +64,7 @@ Installation
    an earlier version, you will need to follow them again.
 
 Docker is available as a Debian package, which makes installation
-easy. **See the :ref:`installmirrors` section below if you are not in
+easy. **See the** :ref:`installmirrors` **section below if you are not in
 the United States.** Other sources of the Debian packages may be
 faster for you to install.
 
@@ -182,9 +182,12 @@ daemon will make the ownership of the Unix socket read/writable by the
 *docker* group when the daemon starts. The ``docker`` daemon must
 always run as the root user, but if you run the ``docker`` client as a user in
 the *docker* group then you don't need to add ``sudo`` to all the
-client commands.  
+client commands. As of 0.9.0, you can specify that a group other than ``docker``
+should own the Unix socket with the ``-G`` option.
 
-.. warning:: The *docker* group is root-equivalent.
+.. warning:: The *docker* group (or the group specified with ``-G``) is
+   root-equivalent.
+
 
 **Example:**
 

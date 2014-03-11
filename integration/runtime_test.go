@@ -3,10 +3,11 @@ package docker
 import (
 	"bytes"
 	"fmt"
-	"github.com/dotcloud/docker"
 	"github.com/dotcloud/docker/engine"
+	"github.com/dotcloud/docker/image"
 	"github.com/dotcloud/docker/nat"
 	"github.com/dotcloud/docker/runconfig"
+	"github.com/dotcloud/docker/runtime"
 	"github.com/dotcloud/docker/sysinit"
 	"github.com/dotcloud/docker/utils"
 	"io"
@@ -15,7 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,14 +36,14 @@ const (
 
 var (
 	// FIXME: globalRuntime is deprecated by globalEngine. All tests should be converted.
-	globalRuntime   *docker.Runtime
+	globalRuntime   *runtime.Runtime
 	globalEngine    *engine.Engine
 	startFds        int
 	startGoroutines int
 )
 
 // FIXME: nuke() is deprecated by Runtime.Nuke()
-func nuke(runtime *docker.Runtime) error {
+func nuke(runtime *runtime.Runtime) error {
 	return runtime.Nuke()
 }
 
@@ -85,7 +86,7 @@ func init() {
 	os.Setenv("TEST", "1")
 
 	// Hack to run sys init during unit testing
-	if selfPath := utils.SelfPath(); selfPath == "/sbin/init" || selfPath == "/.dockerinit" {
+	if selfPath := utils.SelfPath(); strings.Contains(selfPath, ".dockerinit") {
 		sysinit.SysInit()
 		return
 	}
@@ -119,7 +120,7 @@ func init() {
 
 	// Create the "global runtime" with a long-running daemon for integration tests
 	spawnGlobalDaemon()
-	startFds, startGoroutines = utils.GetTotalUsedFds(), runtime.NumGoroutine()
+	startFds, startGoroutines = utils.GetTotalUsedFds(), goruntime.NumGoroutine()
 }
 
 func setupBaseImage() {
@@ -172,7 +173,7 @@ func spawnGlobalDaemon() {
 
 // FIXME: test that ImagePull(json=true) send correct json output
 
-func GetTestImage(runtime *docker.Runtime) *docker.Image {
+func GetTestImage(runtime *runtime.Runtime) *image.Image {
 	imgs, err := runtime.Graph().Map()
 	if err != nil {
 		log.Fatalf("Unable to get the test image: %s", err)
@@ -356,7 +357,7 @@ func TestGet(t *testing.T) {
 
 }
 
-func startEchoServerContainer(t *testing.T, proto string) (*docker.Runtime, *docker.Container, string) {
+func startEchoServerContainer(t *testing.T, proto string) (*runtime.Runtime, *runtime.Container, string) {
 	var (
 		err     error
 		id      string
@@ -587,90 +588,6 @@ func TestRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	container2.State.SetStopped(0)
-}
-
-func TestReloadContainerLinks(t *testing.T) {
-	root, err := newTestDirectory(unitTestStoreBase)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// FIXME: here we don't use NewTestEngine because it calls initserver with Autorestart=false,
-	// and we want to set it to true.
-
-	eng := newTestEngine(t, true, root)
-
-	runtime1 := mkRuntimeFromEngine(eng, t)
-	defer nuke(runtime1)
-	// Create a container with one instance of docker
-	container1, _, _ := mkContainer(runtime1, []string{"-i", "_", "/bin/sh"}, t)
-	defer runtime1.Destroy(container1)
-
-	// Create a second container meant to be killed
-	container2, _, _ := mkContainer(runtime1, []string{"-i", "_", "/bin/cat"}, t)
-	defer runtime1.Destroy(container2)
-
-	// Start the container non blocking
-	if err := container2.Start(); err != nil {
-		t.Fatal(err)
-	}
-	// Add a link to container 2
-	// FIXME @shykes: setting hostConfig.Links seems redundant with calling RegisterLink().
-	// Why do we need it @crosbymichael?
-	// container1.hostConfig.Links = []string{"/" + container2.ID + ":first"}
-	if err := runtime1.RegisterLink(container1, container2, "first"); err != nil {
-		t.Fatal(err)
-	}
-	if err := container1.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	if !container2.State.IsRunning() {
-		t.Fatalf("Container %v should appear as running but isn't", container2.ID)
-	}
-
-	if !container1.State.IsRunning() {
-		t.Fatalf("Container %s should appear as running but isn't", container1.ID)
-	}
-
-	if len(runtime1.List()) != 2 {
-		t.Errorf("Expected 2 container, %v found", len(runtime1.List()))
-	}
-
-	// Here are are simulating a docker restart - that is, reloading all containers
-	// from scratch
-	eng = newTestEngine(t, false, root)
-	runtime2 := mkRuntimeFromEngine(eng, t)
-	if len(runtime2.List()) != 2 {
-		t.Errorf("Expected 2 container, %v found", len(runtime2.List()))
-	}
-	runningCount := 0
-	for _, c := range runtime2.List() {
-		if c.State.IsRunning() {
-			runningCount++
-		}
-	}
-	if runningCount != 2 {
-		t.Fatalf("Expected 2 container alive, %d found", runningCount)
-	}
-
-	// FIXME: we no longer test if containers were registered in the right order,
-	// because there is no public
-	// Make sure container 2 ( the child of container 1 ) was registered and started first
-	// with the runtime
-	//
-	containers := runtime2.List()
-	if len(containers) == 0 {
-		t.Fatalf("Runtime has no containers")
-	}
-	first := containers[0]
-	if first.ID != container2.ID {
-		t.Fatalf("Container 2 %s should be registered first in the runtime", container2.ID)
-	}
-
-	// Verify that the link is still registered in the runtime
-	if c := runtime2.Get(container1.Name); c == nil {
-		t.Fatal("Named container is no longer registered after restart")
-	}
 }
 
 func TestDefaultContainerName(t *testing.T) {

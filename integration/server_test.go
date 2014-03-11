@@ -2,6 +2,7 @@ package docker
 
 import (
 	"github.com/dotcloud/docker"
+	"github.com/dotcloud/docker/engine"
 	"github.com/dotcloud/docker/runconfig"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestImageTagImageDelete(t *testing.T) {
 		t.Errorf("Expected %d images, %d found", nExpected, nActual)
 	}
 
-	if _, err := srv.DeleteImage("utest/docker:tag2", true); err != nil {
+	if err := srv.DeleteImage("utest/docker:tag2", engine.NewTable("", 0), true, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,7 +48,7 @@ func TestImageTagImageDelete(t *testing.T) {
 		t.Errorf("Expected %d images, %d found", nExpected, nActual)
 	}
 
-	if _, err := srv.DeleteImage("utest:5000/docker:tag3", true); err != nil {
+	if err := srv.DeleteImage("utest:5000/docker:tag3", engine.NewTable("", 0), true, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,7 +57,7 @@ func TestImageTagImageDelete(t *testing.T) {
 	nExpected = len(initialImages.Data[0].GetList("RepoTags")) + 1
 	nActual = len(images.Data[0].GetList("RepoTags"))
 
-	if _, err := srv.DeleteImage("utest:tag1", true); err != nil {
+	if err := srv.DeleteImage("utest:tag1", engine.NewTable("", 0), true, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,6 +180,68 @@ func TestCreateRmVolumes(t *testing.T) {
 
 	job = eng.Job("container_delete", id)
 	job.SetenvBool("removeVolume", true)
+	if err := job.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	job = eng.Job("containers")
+	job.SetenvBool("all", true)
+	outs, err = job.Stdout.AddListTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(outs.Data) != 0 {
+		t.Errorf("Expected 0 container, %v found", len(outs.Data))
+	}
+}
+
+func TestCreateRmRunning(t *testing.T) {
+	eng := NewTestEngine(t)
+	defer mkRuntimeFromEngine(eng, t).Nuke()
+
+	config, hostConfig, _, err := runconfig.Parse([]string{"-name", "foo", unitTestImageID, "sleep 300"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := createTestContainer(eng, config, t)
+
+	job := eng.Job("containers")
+	job.SetenvBool("all", true)
+	outs, err := job.Stdout.AddListTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(outs.Data) != 1 {
+		t.Errorf("Expected 1 container, %v found", len(outs.Data))
+	}
+
+	job = eng.Job("start", id)
+	if err := job.ImportEnv(hostConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test cannot remove running container
+	job = eng.Job("container_delete", id)
+	job.SetenvBool("forceRemove", false)
+	if err := job.Run(); err == nil {
+		t.Fatal("Expected container delete to fail")
+	}
+
+	// Test can force removal of running container
+	job = eng.Job("container_delete", id)
+	job.SetenvBool("forceRemove", true)
 	if err := job.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -447,8 +510,7 @@ func TestRmi(t *testing.T) {
 		t.Fatalf("Expected 2 new images, found %d.", images.Len()-initialImages.Len())
 	}
 
-	_, err = srv.DeleteImage(imageID, true)
-	if err != nil {
+	if err = srv.DeleteImage(imageID, engine.NewTable("", 0), true, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -683,8 +745,8 @@ func TestDeleteTagWithExistingContainers(t *testing.T) {
 	}
 
 	// Try to remove the tag
-	imgs, err := srv.DeleteImage("utest:tag1", true)
-	if err != nil {
+	imgs := engine.NewTable("", 0)
+	if err := srv.DeleteImage("utest:tag1", imgs, true, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -692,7 +754,7 @@ func TestDeleteTagWithExistingContainers(t *testing.T) {
 		t.Fatalf("Should only have deleted one untag %d", len(imgs.Data))
 	}
 
-	if untag := imgs.Data[0].Get("Untagged"); untag != unitTestImageID {
+	if untag := imgs.Data[0].Get("Untagged"); untag != "utest:tag1" {
 		t.Fatalf("Expected %s got %s", unitTestImageID, untag)
 	}
 }

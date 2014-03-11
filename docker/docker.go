@@ -10,14 +10,14 @@ import (
 	"github.com/dotcloud/docker/builtins"
 	"github.com/dotcloud/docker/dockerversion"
 	"github.com/dotcloud/docker/engine"
+	"github.com/dotcloud/docker/opts"
 	flag "github.com/dotcloud/docker/pkg/mflag"
-	"github.com/dotcloud/docker/pkg/opts"
 	"github.com/dotcloud/docker/sysinit"
 	"github.com/dotcloud/docker/utils"
 )
 
 func main() {
-	if selfPath := utils.SelfPath(); selfPath == "/sbin/init" || selfPath == "/.dockerinit" {
+	if selfPath := utils.SelfPath(); strings.Contains(selfPath, ".dockerinit") {
 		// Running in init mode
 		sysinit.SysInit()
 		return
@@ -32,6 +32,7 @@ func main() {
 		bridgeIp             = flag.String([]string{"#bip", "-bip"}, "", "Use this CIDR notation address for the network bridge's IP, not compatible with -b")
 		pidfile              = flag.String([]string{"p", "-pidfile"}, "/var/run/docker.pid", "Path to use for daemon PID file")
 		flRoot               = flag.String([]string{"g", "-graph"}, "/var/lib/docker", "Path to use as the root of the docker runtime")
+		flSocketGroup        = flag.String([]string{"G", "-group"}, "docker", "Group to assign the unix socket specified by -H when running in daemon mode; use '' (the empty string) to disable setting of a group")
 		flEnableCors         = flag.Bool([]string{"#api-enable-cors", "-api-enable-cors"}, false, "Enable CORS headers in the remote API")
 		flDns                = opts.NewListOpts(opts.ValidateIp4Address)
 		flEnableIptables     = flag.Bool([]string{"#iptables", "-iptables"}, true, "Disable docker's addition of iptables rules")
@@ -39,7 +40,7 @@ func main() {
 		flDefaultIp          = flag.String([]string{"#ip", "-ip"}, "0.0.0.0", "Default IP address to use when binding container ports")
 		flInterContainerComm = flag.Bool([]string{"#icc", "-icc"}, true, "Enable inter-container communication")
 		flGraphDriver        = flag.String([]string{"s", "-storage-driver"}, "", "Force the docker runtime to use a specific storage driver")
-		flExecDriver         = flag.String([]string{"e", "-exec-driver"}, "", "Force the docker runtime to use a specific exec driver")
+		flExecDriver         = flag.String([]string{"e", "-exec-driver"}, "native", "Force the docker runtime to use a specific exec driver")
 		flHosts              = opts.NewListOpts(api.ValidateHost)
 		flMtu                = flag.Int([]string{"#mtu", "-mtu"}, 0, "Set the containers network MTU; if no value is provided: default to the default route MTU or 1500 if no default route is available")
 	)
@@ -78,7 +79,27 @@ func main() {
 			return
 		}
 
-		eng, err := engine.New(*flRoot)
+		// set up the TempDir to use a canonical path
+		tmp := os.TempDir()
+		realTmp, err := utils.ReadSymlinkedDirectory(tmp)
+		if err != nil {
+			log.Fatalf("Unable to get the full path to the TempDir (%s): %s", tmp, err)
+		}
+		os.Setenv("TMPDIR", realTmp)
+
+		// get the canonical path to the Docker root directory
+		root := *flRoot
+		var realRoot string
+		if _, err := os.Stat(root); err != nil && os.IsNotExist(err) {
+			realRoot = root
+		} else {
+			realRoot, err = utils.ReadSymlinkedDirectory(root)
+			if err != nil {
+				log.Fatalf("Unable to get the full path to root (%s): %s", root, err)
+			}
+		}
+
+		eng, err := engine.New(realRoot)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -91,7 +112,7 @@ func main() {
 			// Load plugin: httpapi
 			job := eng.Job("initserver")
 			job.Setenv("Pidfile", *pidfile)
-			job.Setenv("Root", *flRoot)
+			job.Setenv("Root", realRoot)
 			job.SetenvBool("AutoRestart", *flAutoRestart)
 			job.SetenvList("Dns", flDns.GetAll())
 			job.SetenvBool("EnableIptables", *flEnableIptables)
@@ -118,6 +139,7 @@ func main() {
 		job.SetenvBool("Logging", true)
 		job.SetenvBool("EnableCors", *flEnableCors)
 		job.Setenv("Version", dockerversion.VERSION)
+		job.Setenv("SocketGroup", *flSocketGroup)
 		if err := job.Run(); err != nil {
 			log.Fatal(err)
 		}
